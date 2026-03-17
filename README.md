@@ -136,3 +136,9 @@ Fresh verification recorded on `2026-03-17` in this workspace:
 ## Current Stage
 
 This project is no longer a shell-only prototype. The direct API MVP is functionally complete enough for local usage, regression verification, and interview discussion. The remaining work is mostly productization and packaging: broader instrumentation coverage, final documentation polish, and resume-facing project framing.
+
+## License
+
+This repository is licensed under the MIT License. See [LICENSE](LICENSE).
+
+This project is not affiliated with or endorsed by OpenAI. OpenAI, ChatGPT, and GPT are trademarks of OpenAI.
