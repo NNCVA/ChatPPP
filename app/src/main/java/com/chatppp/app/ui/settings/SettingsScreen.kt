@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -49,6 +50,9 @@ fun SettingsScreen(
     onRelayTokenChanged: (String) -> Unit,
     onToggleDirectApiKeyVisibility: () -> Unit,
     onToggleRelayTokenVisibility: () -> Unit,
+    onRunConnectionTest: () -> Unit,
+    onResetConnectionStatus: () -> Unit,
+    onApplyProviderTemplate: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -100,13 +104,92 @@ fun SettingsScreen(
                 )
             }
 
+            Text(
+                text = state.readinessLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (state.readinessLabel == "Ready") {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
+                modifier = Modifier.testTag("readiness-label")
+            )
+
+            OutlinedButton(
+                onClick = onRunConnectionTest,
+                modifier = Modifier.testTag("test-connection-button")
+            ) {
+                Text("Test connection")
+            }
+
+            state.connectionStatusLabel?.let { status ->
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (status == "Ready" || status == "Testing...") {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    modifier = Modifier.testTag("connection-status-label")
+                )
+            }
+
+            Text(
+                text = "Provider templates",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Apply a starter endpoint and model preset. Secrets stay untouched until you paste your own key or relay token.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            state.providerTemplates.forEach { template ->
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = template.title,
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = template.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "URL: ${template.baseUrl}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Model: ${template.model}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            onApplyProviderTemplate(template.id)
+                            onResetConnectionStatus()
+                        },
+                        modifier = Modifier.testTag("provider-template-${template.id}")
+                    ) {
+                        Text("Apply template")
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = state.baseUrl,
                 onValueChange = onBaseUrlChanged,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("base-url-input"),
-                label = { Text("OpenAI Base URL") }
+                label = { Text("OpenAI Base URL") },
+                isError = state.baseUrlError != null,
+                supportingText = state.baseUrlError?.let { { Text(it) } }
             )
 
             OutlinedTextField(
@@ -126,6 +209,8 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .testTag("direct-api-key-input"),
                     label = { Text("Direct API Key") },
+                    isError = state.credentialError != null,
+                    supportingText = state.credentialError?.let { { Text(it) } },
                     visualTransformation = if (state.directApiKeyVisible) {
                         VisualTransformation.None
                     } else {
@@ -154,6 +239,8 @@ fun SettingsScreen(
                         .fillMaxWidth()
                         .testTag("relay-token-input"),
                     label = { Text("Relay Token") },
+                    isError = state.credentialError != null,
+                    supportingText = state.credentialError?.let { { Text(it) } },
                     visualTransformation = if (state.relayTokenVisible) {
                         VisualTransformation.None
                     } else {

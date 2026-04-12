@@ -12,9 +12,12 @@ import com.chatppp.app.data.local.preferences.AppPreferences
 import com.chatppp.app.data.remote.model.ChatRequestDto
 import com.chatppp.app.data.remote.provider.ChatProvider
 import com.chatppp.app.data.remote.provider.ProviderSelector
+import com.chatppp.app.data.remote.provider.SettingsValidationResult
 import com.chatppp.app.domain.model.ChatChunk
 import com.chatppp.app.domain.model.ChatError
 import com.chatppp.app.domain.model.ConfigPreset
+import com.chatppp.app.domain.model.Conversation
+import com.chatppp.app.domain.model.Message
 import com.chatppp.app.domain.model.MessageRole
 import com.chatppp.app.domain.model.MessageStatus
 import com.chatppp.app.domain.model.ProviderType
@@ -573,6 +576,148 @@ class DefaultChatRepositoryTest {
         assertEquals("No response received from model", messages.last().content)
     }
 
+    @Test
+    fun update_conversation_title_updates_title_and_timestamp() = runTest {
+        val conversationDao = FakeConversationDao()
+        val messageDao = FakeMessageDao()
+        val preferences = createPreferences()
+
+        conversationDao.upsert(
+            ConversationEntity(
+                id = "conversation-1",
+                title = "Old Title",
+                providerType = ProviderType.DIRECT.name,
+                createdAt = 1L,
+                updatedAt = 1L
+            )
+        )
+
+        val repository = DefaultChatRepository(
+            conversationDao = conversationDao,
+            messageDao = messageDao,
+            appPreferences = preferences,
+            providerSelector = FakeProviderSelector(
+                directProvider = FakeChatProvider(),
+                relayProvider = FakeChatProvider()
+            ),
+            clock = { 100L }
+        )
+
+        repository.updateConversationTitle("conversation-1", "New Title")
+
+        val snapshot = conversationDao.snapshot("conversation-1")
+        assertEquals("New Title", snapshot?.title)
+        assertEquals(100L, snapshot?.updatedAt)
+    }
+
+    @Test
+    fun restore_conversation_recreates_deleted_conversation() = runTest {
+        val conversationDao = FakeConversationDao()
+        val messageDao = FakeMessageDao()
+        val preferences = createPreferences()
+
+        val originalConversation = ConversationEntity(
+            id = "conversation-1",
+            title = "Restored Chat",
+            providerType = ProviderType.RELAY.name,
+            presetId = "preset-1",
+            createdAt = 50L,
+            updatedAt = 100L
+        )
+        conversationDao.upsert(originalConversation)
+        conversationDao.deleteById("conversation-1")
+
+        assertEquals(null, conversationDao.snapshot("conversation-1"))
+
+        val repository = DefaultChatRepository(
+            conversationDao = conversationDao,
+            messageDao = messageDao,
+            appPreferences = preferences,
+            providerSelector = FakeProviderSelector(
+                directProvider = FakeChatProvider(),
+                relayProvider = FakeChatProvider()
+            )
+        )
+
+        repository.restoreConversation(
+            Conversation(
+                id = "conversation-1",
+                title = "Restored Chat",
+                providerType = ProviderType.RELAY,
+                presetId = "preset-1",
+                createdAt = 50L,
+                updatedAt = 100L
+            ),
+            emptyList()
+        )
+
+        val restored = conversationDao.snapshot("conversation-1")
+        assertEquals("conversation-1", restored?.id)
+        assertEquals("Restored Chat", restored?.title)
+        assertEquals(ProviderType.RELAY.name, restored?.providerType)
+        assertEquals("preset-1", restored?.presetId)
+    }
+
+    @Test
+    fun restore_conversation_also_restores_deleted_messages() = runTest {
+        val conversationDao = FakeConversationDao()
+        val messageDao = FakeMessageDao()
+        val preferences = createPreferences()
+
+        val repository = DefaultChatRepository(
+            conversationDao = conversationDao,
+            messageDao = messageDao,
+            appPreferences = preferences,
+            providerSelector = FakeProviderSelector(
+                directProvider = FakeChatProvider(),
+                relayProvider = FakeChatProvider()
+            )
+        )
+
+        repository.restoreConversation(
+            Conversation(
+                id = "conversation-restore",
+                title = "Restored With Messages",
+                providerType = ProviderType.DIRECT,
+                createdAt = 10L,
+                updatedAt = 20L
+            ),
+            listOf(
+                MessageEntity(
+                    id = "message-1",
+                    conversationId = "conversation-restore",
+                    role = MessageRole.USER.name,
+                    content = "Original prompt",
+                    status = MessageStatus.SUCCESS.name,
+                    createdAt = 11L
+                ),
+                MessageEntity(
+                    id = "message-2",
+                    conversationId = "conversation-restore",
+                    role = MessageRole.ASSISTANT.name,
+                    content = "Original reply",
+                    status = MessageStatus.SUCCESS.name,
+                    createdAt = 12L
+                )
+            ).map { entity ->
+                Message(
+                    id = entity.id,
+                    conversationId = entity.conversationId,
+                    role = MessageRole.valueOf(entity.role),
+                    content = entity.content,
+                    status = MessageStatus.valueOf(entity.status),
+                    createdAt = entity.createdAt
+                )
+            }
+        )
+
+        val restoredMessages = repository.observeMessages("conversation-restore").first()
+
+        assertEquals(2, restoredMessages.size)
+        assertEquals("Original prompt", restoredMessages[0].content)
+        assertEquals("Original reply", restoredMessages[1].content)
+    }
+
     private fun createPreferences(): AppPreferences {
         val directory = Files.createTempDirectory("chatppp-repository-test").toFile()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -657,6 +802,18 @@ private class FakeConversationDao : ConversationDao {
         items.update { existing -> existing.filterNot { it.id == conversationId } }
     }
 
+    override suspend fun updateTitle(conversationId: String, title: String, updatedAt: Long) {
+        items.update { existing ->
+            existing.map { conversation ->
+                if (conversation.id == conversationId) {
+                    conversation.copy(title = title, updatedAt = updatedAt)
+                } else {
+                    conversation
+                }
+            }.sortedByDescending { it.updatedAt }
+        }
+    }
+
     fun snapshot(conversationId: String): ConversationEntity? =
         items.value.firstOrNull { it.id == conversationId }
 }
@@ -678,6 +835,11 @@ private class FakeMessageDao : MessageDao {
     override suspend fun deleteByConversationId(conversationId: String) {
         items.update { existing -> existing.filterNot { it.conversationId == conversationId } }
     }
+
+    override suspend fun getLastMessage(conversationId: String): MessageEntity? =
+        items.value
+            .filter { it.conversationId == conversationId }
+            .maxByOrNull { it.createdAt }
 
     fun snapshot(conversationId: String): List<MessageEntity> =
         runBlocking { observeByConversationId(conversationId).first() }
@@ -717,6 +879,13 @@ private class FakeProviderSelector(
             ProviderType.RELAY -> relayProvider
         }
     }
+
+    override fun validate(
+        providerType: ProviderType,
+        baseUrl: String,
+        directApiKey: String?,
+        relayToken: String?
+    ): SettingsValidationResult = SettingsValidationResult.ready()
 }
 
 private class FakeConfigPresetStore(

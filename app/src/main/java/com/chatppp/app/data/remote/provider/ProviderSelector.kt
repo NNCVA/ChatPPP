@@ -12,6 +12,36 @@ import okhttp3.OkHttpClient
 
 interface ProviderSelector {
     suspend fun select(providerType: ProviderType): ChatProvider
+
+    fun validate(
+        providerType: ProviderType,
+        baseUrl: String,
+        directApiKey: String?,
+        relayToken: String?
+    ): SettingsValidationResult
+}
+
+data class SettingsValidationResult(
+    val baseUrlError: String? = null,
+    val modelError: String? = null,
+    val credentialError: String? = null,
+    val readinessLabel: String = "Not ready"
+) {
+    companion object {
+        fun ready() = SettingsValidationResult(readinessLabel = "Ready")
+        fun notReady(vararg errors: Pair<String, String>): SettingsValidationResult {
+            val baseUrlError = errors.find { it.first == "baseUrl" }?.second
+            val modelError = errors.find { it.first == "model" }?.second
+            val credentialError = errors.find { it.first == "credential" }?.second
+            val hasErrors = baseUrlError != null || modelError != null || credentialError != null
+            return SettingsValidationResult(
+                baseUrlError = baseUrlError,
+                modelError = modelError,
+                credentialError = credentialError,
+                readinessLabel = if (hasErrors) "Not ready" else "Ready"
+            )
+        }
+    }
 }
 
 class RuntimeProviderSelector @Inject constructor(
@@ -22,7 +52,7 @@ class RuntimeProviderSelector @Inject constructor(
     private val secretStore: SecretStore
 ) : ProviderSelector {
     override suspend fun select(providerType: ProviderType): ChatProvider {
-        val endpointUrl = appPreferences.baseUrl.first().trim().toChatCompletionsEndpoint()
+        val endpointUrl = normalizeChatCompletionsEndpoint(appPreferences.baseUrl.first())
         if (endpointUrl.isEmpty()) {
             throw ChatError.Config("Base URL is required before sending chat requests")
         }
@@ -58,16 +88,61 @@ class RuntimeProviderSelector @Inject constructor(
         }
     }
 
-    private fun String.toChatCompletionsEndpoint(): String {
-        if (isEmpty()) {
-            return ""
+    override fun validate(
+        providerType: ProviderType,
+        baseUrl: String,
+        directApiKey: String?,
+        relayToken: String?
+    ): SettingsValidationResult {
+        val errors = mutableListOf<Pair<String, String>>()
+
+        val baseUrlError = baseUrlValidationError(baseUrl)
+        if (baseUrlError != null) {
+            errors.add("baseUrl" to baseUrlError)
         }
 
-        val normalized = removeSuffix("/")
-        if (normalized.endsWith("/chat/completions")) {
-            throw ChatError.Config("OpenAI Base URL must not include /chat/completions")
+        when (providerType) {
+            ProviderType.DIRECT -> {
+                if (directApiKey.isNullOrBlank()) {
+                    errors.add("credential" to "Direct mode requires an API key")
+                }
+            }
+            ProviderType.RELAY -> {
+                if (relayToken.isNullOrBlank()) {
+                    errors.add("credential" to "Relay mode requires your own backend relay token")
+                }
+            }
         }
 
-        return "$normalized/chat/completions"
+        return if (errors.isEmpty() && baseUrl.isNotBlank()) {
+            SettingsValidationResult.ready()
+        } else {
+            SettingsValidationResult.notReady(*errors.toTypedArray())
+        }
     }
+}
+
+internal fun baseUrlValidationError(baseUrl: String): String? {
+    if (baseUrl.isBlank()) {
+        return null
+    }
+
+    val normalized = baseUrl.trim().removeSuffix("/")
+    return if (normalized.endsWith("/chat/completions")) {
+        "OpenAI Base URL must not include /chat/completions"
+    } else {
+        null
+    }
+}
+
+internal fun normalizeChatCompletionsEndpoint(baseUrl: String): String {
+    if (baseUrl.isBlank()) {
+        return ""
+    }
+
+    baseUrlValidationError(baseUrl)?.let { error ->
+        throw ChatError.Config(error)
+    }
+
+    return "${baseUrl.trim().removeSuffix("/")}/chat/completions"
 }

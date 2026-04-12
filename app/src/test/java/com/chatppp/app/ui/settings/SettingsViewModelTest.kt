@@ -6,10 +6,16 @@ import androidx.datastore.preferences.core.Preferences
 import com.chatppp.app.data.local.preferences.AppPreferences
 import com.chatppp.app.data.local.secrets.SecretStore
 import com.chatppp.app.data.presets.ConfigPresetStore
+import com.chatppp.app.data.remote.provider.ChatProvider
+import com.chatppp.app.data.remote.provider.ConnectionTestResult
+import com.chatppp.app.data.remote.provider.ConnectionTestService
+import com.chatppp.app.data.remote.provider.ProviderSelector
+import com.chatppp.app.data.remote.provider.SettingsValidationResult
 import com.chatppp.app.domain.model.ConfigPreset
 import com.chatppp.app.domain.model.ProviderType
 import com.chatppp.app.ui.MainDispatcherRule
 import java.nio.file.Files
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +37,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = FakeSecretStore(),
-            configPresetStore = FakeSettingsConfigPresetStore()
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.updateProviderType(ProviderType.RELAY)
@@ -47,7 +55,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = FakeSecretStore(),
-            configPresetStore = FakeSettingsConfigPresetStore()
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.updateBaseUrl("https://relay.example.com")
@@ -67,7 +77,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = secretStore,
-            configPresetStore = FakeSettingsConfigPresetStore()
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.saveDirectApiKey("direct-secret")
@@ -86,7 +98,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = FakeSecretStore(),
-            configPresetStore = FakeSettingsConfigPresetStore()
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.updateSummaryCompressionEnabled(false)
@@ -111,7 +125,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = secretStore,
-            configPresetStore = presetStore
+            configPresetStore = presetStore,
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.updatePresetDraftName("Work Direct")
@@ -143,7 +159,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = secretStore,
-            configPresetStore = presetStore
+            configPresetStore = presetStore,
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.activatePreset("preset-1")
@@ -174,7 +192,9 @@ class SettingsViewModelTest {
         val viewModel = SettingsViewModel(
             appPreferences = appPreferences,
             secretStore = FakeSecretStore(),
-            configPresetStore = presetStore
+            configPresetStore = presetStore,
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
         )
 
         viewModel.startRenamingPreset("preset-1")
@@ -189,6 +209,30 @@ class SettingsViewModelTest {
         assertEquals(null, viewModel.uiState.value.editingPresetId)
     }
 
+    @Test
+    fun applying_provider_template_prefills_provider_settings() = runTest {
+        val appPreferences = createAppPreferences()
+        val secretStore = FakeSecretStore().apply {
+            saveDirectApiKey("existing-direct-key")
+        }
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = secretStore,
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        advanceUntilIdle()
+        viewModel.applyProviderTemplate("openai-official")
+        advanceUntilIdle()
+
+        assertEquals(ProviderType.DIRECT, viewModel.uiState.value.providerType)
+        assertEquals("https://api.openai.com/v1", viewModel.uiState.value.baseUrl)
+        assertEquals("gpt-4.1-mini", viewModel.uiState.value.model)
+        assertEquals("existing-direct-key", viewModel.uiState.value.directApiKey)
+    }
+
     private fun createAppPreferences(): AppPreferences {
         val tempDirectory = Files.createTempDirectory("settings-viewmodel-test").toFile()
         val scope = CoroutineScope(SupervisorJob() + mainDispatcherRule.dispatcher)
@@ -197,6 +241,202 @@ class SettingsViewModelTest {
             produceFile = { tempDirectory.resolve("settings.preferences_pb") }
         )
         return AppPreferences(dataStore)
+    }
+
+    @Test
+    fun invalid_chat_completions_suffix_is_exposed_as_inline_validation() = runTest {
+        val appPreferences = createAppPreferences()
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = FakeSecretStore(),
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        viewModel.updateBaseUrl("https://api.openai.com/v1/chat/completions")
+        advanceUntilIdle()
+
+        assertEquals(
+            "OpenAI Base URL must not include /chat/completions",
+            viewModel.uiState.value.baseUrlError
+        )
+    }
+
+    @Test
+    fun missing_api_key_is_exposed_as_inline_validation() = runTest {
+        val appPreferences = createAppPreferences()
+        val secretStore = FakeSecretStore()
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = secretStore,
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        viewModel.updateProviderType(ProviderType.DIRECT)
+        advanceUntilIdle()
+
+        assertEquals(
+            "Direct mode requires an API key",
+            viewModel.uiState.value.credentialError
+        )
+    }
+
+    @Test
+    fun readiness_label_shows_not_ready_when_missing_required_config() = runTest {
+        val appPreferences = createAppPreferences()
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = FakeSecretStore(),
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        advanceUntilIdle()
+
+        assertEquals("Not ready", viewModel.uiState.value.readinessLabel)
+    }
+
+    @Test
+    fun connection_test_success_updates_status_to_ready() = runTest {
+        val appPreferences = createAppPreferences()
+        appPreferences.updateProviderAndChatSettings(
+            providerType = ProviderType.DIRECT,
+            baseUrl = "https://api.openai.com/v1",
+            model = "gpt-4.1-mini",
+            streamEnabled = true
+        )
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = FakeSecretStore(),
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        advanceUntilIdle()
+        viewModel.runConnectionTest()
+        advanceUntilIdle()
+
+        assertEquals("Ready", viewModel.uiState.value.connectionStatusLabel)
+    }
+
+    @Test
+    fun connection_test_failure_updates_status_with_error_message() = runTest {
+        val appPreferences = createAppPreferences()
+        appPreferences.updateProviderAndChatSettings(
+            providerType = ProviderType.DIRECT,
+            baseUrl = "https://api.openai.com/v1",
+            model = "gpt-4.1-mini",
+            streamEnabled = true
+        )
+        val fakeConnectionTestService = FakeConnectionTestService()
+        fakeConnectionTestService.shouldSucceed = false
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = FakeSecretStore(),
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = fakeConnectionTestService
+        )
+
+        advanceUntilIdle()
+        viewModel.runConnectionTest()
+        advanceUntilIdle()
+
+        assertEquals("Failed: Test failed", viewModel.uiState.value.connectionStatusLabel)
+    }
+
+    @Test
+    fun reset_connection_status_clears_status_label() = runTest {
+        val appPreferences = createAppPreferences()
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = FakeSecretStore(),
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        advanceUntilIdle()
+        viewModel.runConnectionTest()
+        advanceUntilIdle()
+        assertEquals("Ready", viewModel.uiState.value.connectionStatusLabel)
+
+        viewModel.resetConnectionStatus()
+        assertEquals(null, viewModel.uiState.value.connectionStatusLabel)
+    }
+
+    @Test
+    fun changing_credentials_clears_previous_connection_test_status() = runTest {
+        val appPreferences = createAppPreferences().also {
+            it.updateProviderAndChatSettings(
+                providerType = ProviderType.DIRECT,
+                baseUrl = "https://api.openai.com/v1",
+                model = "gpt-4.1-mini",
+                streamEnabled = true
+            )
+        }
+        val secretStore = FakeSecretStore().apply {
+            saveDirectApiKey("old-key")
+        }
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = secretStore,
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = FakeConnectionTestService()
+        )
+
+        advanceUntilIdle()
+        viewModel.runConnectionTest()
+        advanceUntilIdle()
+        assertEquals("Ready", viewModel.uiState.value.connectionStatusLabel)
+
+        viewModel.saveDirectApiKey("new-key")
+        advanceUntilIdle()
+
+        assertEquals(null, viewModel.uiState.value.connectionStatusLabel)
+    }
+
+    @Test
+    fun stale_connection_test_result_is_ignored_after_inputs_change() = runTest {
+        val appPreferences = createAppPreferences().also {
+            it.updateProviderAndChatSettings(
+                providerType = ProviderType.DIRECT,
+                baseUrl = "https://api.openai.com/v1",
+                model = "gpt-4.1-mini",
+                streamEnabled = true
+            )
+        }
+        val secretStore = FakeSecretStore().apply {
+            saveDirectApiKey("old-key")
+        }
+        val connectionTestService = ControllableConnectionTestService()
+        val viewModel = SettingsViewModel(
+            appPreferences = appPreferences,
+            secretStore = secretStore,
+            configPresetStore = FakeSettingsConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            connectionTestService = connectionTestService
+        )
+
+        advanceUntilIdle()
+        viewModel.runConnectionTest()
+        advanceUntilIdle()
+        assertEquals("Testing...", viewModel.uiState.value.connectionStatusLabel)
+
+        viewModel.saveDirectApiKey("new-key")
+        advanceUntilIdle()
+        assertEquals(null, viewModel.uiState.value.connectionStatusLabel)
+
+        connectionTestService.completeNext(ConnectionTestResult.Success)
+        advanceUntilIdle()
+
+        assertEquals(null, viewModel.uiState.value.connectionStatusLabel)
     }
 }
 
@@ -246,5 +486,86 @@ private class FakeSettingsConfigPresetStore(
 
     override suspend fun setActivePresetId(presetId: String?) {
         activePresetId.value = presetId
+    }
+}
+
+private class FakeProviderSelector : ProviderSelector {
+    override suspend fun select(providerType: ProviderType): ChatProvider {
+        throw NotImplementedError()
+    }
+
+    override fun validate(
+        providerType: ProviderType,
+        baseUrl: String,
+        directApiKey: String?,
+        relayToken: String?
+    ): SettingsValidationResult {
+        val errors = mutableListOf<Pair<String, String>>()
+        if (baseUrl.contains("/chat/completions")) {
+            errors.add("baseUrl" to "OpenAI Base URL must not include /chat/completions")
+        }
+        when (providerType) {
+            ProviderType.DIRECT -> {
+                if (directApiKey.isNullOrBlank()) {
+                    errors.add("credential" to "Direct mode requires an API key")
+                }
+            }
+            ProviderType.RELAY -> {
+                if (relayToken.isNullOrBlank()) {
+                    errors.add("credential" to "Relay mode requires your own backend relay token")
+                }
+            }
+        }
+        return if (errors.isEmpty() && baseUrl.isNotBlank()) {
+            SettingsValidationResult.ready()
+        } else {
+            SettingsValidationResult.notReady(*errors.toTypedArray())
+        }
+    }
+}
+
+private class FakeConnectionTestService : ConnectionTestService {
+    var shouldSucceed = true
+
+    constructor() : super(
+        okHttpClient = okhttp3.OkHttpClient(),
+        json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+    )
+
+    override suspend fun testConnection(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        relayToken: String?,
+        isRelay: Boolean
+    ): ConnectionTestResult {
+        return if (shouldSucceed) {
+            ConnectionTestResult.Success
+        } else {
+            ConnectionTestResult.Failure("Test failed")
+        }
+    }
+}
+
+private class ControllableConnectionTestService : ConnectionTestService(
+    okHttpClient = okhttp3.OkHttpClient(),
+    json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+) {
+    private val pendingResults = ArrayDeque<CompletableDeferred<ConnectionTestResult>>()
+
+    override suspend fun testConnection(
+        baseUrl: String,
+        model: String,
+        apiKey: String?,
+        relayToken: String?,
+        isRelay: Boolean
+    ): ConnectionTestResult {
+        val result = CompletableDeferred<ConnectionTestResult>()
+        pendingResults.addLast(result)
+        return result.await()
+    }
+
+    fun completeNext(result: ConnectionTestResult) {
+        pendingResults.removeFirst().complete(result)
     }
 }

@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.chatppp.app.data.local.preferences.AppPreferences
 import com.chatppp.app.data.local.secrets.SecretStore
 import com.chatppp.app.data.presets.ConfigPresetStore
+import com.chatppp.app.data.remote.provider.ConnectionTestService
+import com.chatppp.app.data.remote.provider.ConnectionTestResult
+import com.chatppp.app.data.remote.provider.ProviderSelector
 import com.chatppp.app.domain.model.ConfigPreset
 import com.chatppp.app.domain.model.ProviderType
 import java.util.UUID
@@ -21,15 +24,20 @@ import kotlinx.coroutines.sync.withLock
 class SettingsViewModel(
     private val appPreferences: AppPreferences,
     private val secretStore: SecretStore,
-    private val configPresetStore: ConfigPresetStore
+    private val configPresetStore: ConfigPresetStore,
+    private val providerSelector: ProviderSelector,
+    private val connectionTestService: ConnectionTestService
 ) : ViewModel() {
+    private val providerTemplates = defaultProviderTemplates()
     private val preferencesWriteMutex = Mutex()
     private var settingsPersistJob: Job? = null
+    private var connectionStatusVersion = 0L
 
     private val _uiState = MutableStateFlow(
         SettingsUiState(
             directApiKey = secretStore.getDirectApiKey().orEmpty(),
-            relayToken = secretStore.getRelayToken().orEmpty()
+            relayToken = secretStore.getRelayToken().orEmpty(),
+            providerTemplates = providerTemplates
         )
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -52,6 +60,14 @@ class SettingsViewModel(
                 val summaryCompressionEnabled = values[4] as Boolean
                 val presets = values[5] as List<ConfigPreset>
                 val activePresetId = values[6] as String?
+                val directApiKey = secretStore.getDirectApiKey().orEmpty()
+                val relayToken = secretStore.getRelayToken().orEmpty()
+                val validation = providerSelector.validate(
+                    providerType,
+                    baseUrl,
+                    directApiKey,
+                    relayToken
+                )
                 SettingsUiState(
                     providerType = providerType,
                     baseUrl = baseUrl,
@@ -68,8 +84,13 @@ class SettingsViewModel(
                         )
                     },
                     activePresetId = activePresetId,
-                    directApiKey = secretStore.getDirectApiKey().orEmpty(),
-                    relayToken = secretStore.getRelayToken().orEmpty()
+                    directApiKey = directApiKey,
+                    relayToken = relayToken,
+                    baseUrlError = validation.baseUrlError,
+                    modelError = validation.modelError,
+                    credentialError = validation.credentialError,
+                    readinessLabel = validation.readinessLabel,
+                    providerTemplates = providerTemplates
                 )
             }.collect { state ->
                 _uiState.update { current ->
@@ -77,7 +98,8 @@ class SettingsViewModel(
                         presetDraftName = current.presetDraftName,
                         editingPresetId = current.editingPresetId,
                         directApiKeyVisible = current.directApiKeyVisible,
-                        relayTokenVisible = current.relayTokenVisible
+                        relayTokenVisible = current.relayTokenVisible,
+                        connectionStatusLabel = current.connectionStatusLabel
                     )
                 }
             }
@@ -86,19 +108,24 @@ class SettingsViewModel(
 
     fun updateProviderType(providerType: ProviderType) {
         viewModelScope.launch {
+            invalidateConnectionStatus()
             preferencesWriteMutex.withLock {
                 appPreferences.setProviderType(providerType)
             }
+            recomputeValidation()
         }
     }
 
     fun updateBaseUrl(baseUrl: String) {
         _uiState.update { it.copy(baseUrl = baseUrl) }
+        invalidateConnectionStatus()
         scheduleChatSettingsPersist()
+        recomputeValidation()
     }
 
     fun updateModel(model: String) {
         _uiState.update { it.copy(model = model) }
+        invalidateConnectionStatus()
         scheduleChatSettingsPersist()
     }
 
@@ -131,11 +158,32 @@ class SettingsViewModel(
     fun saveDirectApiKey(value: String) {
         secretStore.saveDirectApiKey(value)
         _uiState.update { it.copy(directApiKey = value) }
+        invalidateConnectionStatus()
+        recomputeValidation()
     }
 
     fun saveRelayToken(value: String) {
         secretStore.saveRelayToken(value)
         _uiState.update { it.copy(relayToken = value) }
+        invalidateConnectionStatus()
+        recomputeValidation()
+    }
+
+    fun applyProviderTemplate(templateId: String) {
+        val template = providerTemplates.firstOrNull { it.id == templateId } ?: return
+        val streamEnabled = uiState.value.streamEnabled
+        viewModelScope.launch {
+            invalidateConnectionStatus()
+            preferencesWriteMutex.withLock {
+                appPreferences.updateProviderAndChatSettings(
+                    providerType = template.providerType,
+                    baseUrl = template.baseUrl,
+                    model = template.model,
+                    streamEnabled = streamEnabled
+                )
+            }
+            recomputeValidation()
+        }
     }
 
     fun toggleDirectApiKeyVisibility() {
@@ -148,6 +196,38 @@ class SettingsViewModel(
         _uiState.update { state ->
             state.copy(relayTokenVisible = !state.relayTokenVisible)
         }
+    }
+
+    fun runConnectionTest() {
+        val state = uiState.value
+        val requestVersion = connectionStatusVersion + 1
+        connectionStatusVersion = requestVersion
+        _uiState.update { it.copy(connectionStatusLabel = "Testing...") }
+        viewModelScope.launch {
+            val result = connectionTestService.testConnection(
+                baseUrl = state.baseUrl,
+                model = state.model,
+                apiKey = state.directApiKey.takeIf { state.providerType == ProviderType.DIRECT },
+                relayToken = state.relayToken.takeIf { state.providerType == ProviderType.RELAY },
+                isRelay = state.providerType == ProviderType.RELAY
+            )
+            if (connectionStatusVersion != requestVersion) {
+                return@launch
+            }
+            _uiState.update { current ->
+                current.copy(
+                    connectionStatusLabel = when (result) {
+                        is ConnectionTestResult.Success -> "Ready"
+                        is ConnectionTestResult.Failure -> "Failed: ${result.message}"
+                    }
+                )
+            }
+        }
+    }
+
+    fun resetConnectionStatus() {
+        connectionStatusVersion += 1
+        _uiState.update { it.copy(connectionStatusLabel = null) }
     }
 
     fun saveCurrentConfigAsPreset() {
@@ -182,6 +262,7 @@ class SettingsViewModel(
     fun activatePreset(presetId: String) {
         viewModelScope.launch {
             val preset = configPresetStore.getPreset(presetId) ?: return@launch
+            invalidateConnectionStatus()
             configPresetStore.setActivePresetId(presetId)
             preferencesWriteMutex.withLock {
                 appPreferences.updateProviderAndChatSettings(
@@ -227,6 +308,35 @@ class SettingsViewModel(
                     streamEnabled = state.streamEnabled,
                     summaryCompressionEnabled = state.summaryCompressionEnabled
                 )
+            }
+        }
+    }
+
+    private fun recomputeValidation() {
+        val state = uiState.value
+        val validation = providerSelector.validate(
+            state.providerType,
+            state.baseUrl,
+            state.directApiKey.takeIf { state.providerType == ProviderType.DIRECT },
+            state.relayToken.takeIf { state.providerType == ProviderType.RELAY }
+        )
+        _uiState.update {
+            it.copy(
+                baseUrlError = validation.baseUrlError,
+                modelError = validation.modelError,
+                credentialError = validation.credentialError,
+                readinessLabel = validation.readinessLabel
+            )
+        }
+    }
+
+    private fun invalidateConnectionStatus() {
+        connectionStatusVersion += 1
+        _uiState.update { current ->
+            if (current.connectionStatusLabel == null) {
+                current
+            } else {
+                current.copy(connectionStatusLabel = null)
             }
         }
     }

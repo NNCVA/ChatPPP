@@ -8,8 +8,21 @@ data class ChatUiState(
     val isStreaming: Boolean = false,
     val availablePresets: List<ChatPresetUiModel> = emptyList(),
     val selectedPresetId: String? = null,
-    val selectedPresetName: String? = null
+    val selectedPresetName: String? = null,
+    val requiresSetup: Boolean = true,
+    val readinessLabel: String = "Not ready",
+    val recoveryActionLabel: String? = null,
+    val recoveryActionType: RecoveryActionType? = null,
+    val requestPhaseLabel: String? = null,
+    val compressionNotice: String? = null,
+    val copiedMessageContent: String? = null
 )
+
+enum class RecoveryActionType {
+    RETRY,
+    OPEN_SETTINGS,
+    NONE
+}
 
 data class ChatPresetUiModel(
     val id: String,

@@ -37,13 +37,16 @@ class SettingsScreenTest {
                 onDirectApiKeyChanged = {},
                 onRelayTokenChanged = {},
                 onToggleDirectApiKeyVisibility = {},
-                onToggleRelayTokenVisibility = {}
+                onToggleRelayTokenVisibility = {},
+                onRunConnectionTest = {},
+                onResetConnectionStatus = {},
+                onApplyProviderTemplate = {}
             )
         }
 
-        composeRule.onNodeWithText("OpenAI Base URL").assertIsDisplayed()
-        composeRule.onNodeWithText("Direct API Key").assertIsDisplayed()
-        composeRule.onNodeWithTag("direct-api-key-input").assertIsDisplayed()
+        composeRule.onNodeWithText("OpenAI Base URL").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Direct API Key").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("direct-api-key-input").performScrollTo().assertIsDisplayed()
         composeRule.onAllNodesWithTag("relay-token-input").assertCountEquals(0)
     }
 
@@ -66,13 +69,16 @@ class SettingsScreenTest {
                 onDirectApiKeyChanged = {},
                 onRelayTokenChanged = {},
                 onToggleDirectApiKeyVisibility = {},
-                onToggleRelayTokenVisibility = {}
+                onToggleRelayTokenVisibility = {},
+                onRunConnectionTest = {},
+                onResetConnectionStatus = {},
+                onApplyProviderTemplate = {}
             )
         }
 
-        composeRule.onNodeWithText("Relay Token").assertIsDisplayed()
-        composeRule.onNodeWithText("Relay mode requires your own backend").assertIsDisplayed()
-        composeRule.onNodeWithTag("relay-token-input").assertIsDisplayed()
+        composeRule.onNodeWithText("Relay Token").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Relay mode requires your own backend").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("relay-token-input").performScrollTo().assertIsDisplayed()
         composeRule.onAllNodesWithTag("direct-api-key-input").assertCountEquals(0)
     }
 
@@ -105,7 +111,10 @@ class SettingsScreenTest {
                 onDirectApiKeyChanged = {},
                 onRelayTokenChanged = {},
                 onToggleDirectApiKeyVisibility = {},
-                onToggleRelayTokenVisibility = {}
+                onToggleRelayTokenVisibility = {},
+                onRunConnectionTest = {},
+                onResetConnectionStatus = {},
+                onApplyProviderTemplate = {}
             )
         }
 
@@ -114,6 +123,35 @@ class SettingsScreenTest {
         composeRule.onNodeWithTag("activate-preset-preset-1").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("rename-preset-preset-1").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("delete-preset-preset-1").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun provider_templates_section_is_visible() {
+        composeRule.setContent {
+            SettingsScreen(
+                state = SettingsUiState(),
+                onBack = {},
+                onProviderTypeChanged = {},
+                onBaseUrlChanged = {},
+                onModelChanged = {},
+                onStreamEnabledChanged = {},
+                onSummaryCompressionEnabledChanged = {},
+                onPresetDraftNameChanged = {},
+                onSaveCurrentPreset = {},
+                onActivatePreset = {},
+                onStartRenamingPreset = {},
+                onDeletePreset = {},
+                onDirectApiKeyChanged = {},
+                onRelayTokenChanged = {},
+                onToggleDirectApiKeyVisibility = {},
+                onToggleRelayTokenVisibility = {},
+                onRunConnectionTest = {},
+                onResetConnectionStatus = {},
+                onApplyProviderTemplate = {}
+            )
+        }
+
+        composeRule.onNodeWithText("Provider templates").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -135,7 +173,10 @@ class SettingsScreenTest {
                 onDirectApiKeyChanged = {},
                 onRelayTokenChanged = {},
                 onToggleDirectApiKeyVisibility = {},
-                onToggleRelayTokenVisibility = {}
+                onToggleRelayTokenVisibility = {},
+                onRunConnectionTest = {},
+                onResetConnectionStatus = {},
+                onApplyProviderTemplate = {}
             )
         }
 

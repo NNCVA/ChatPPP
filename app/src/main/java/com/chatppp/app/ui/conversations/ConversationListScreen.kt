@@ -19,9 +19,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -29,12 +36,31 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ConversationListScreen(
     state: ConversationListUiState,
+    effects: kotlinx.coroutines.flow.SharedFlow<ConversationListEffect>,
     onBack: () -> Unit,
     onCreateConversation: () -> Unit,
     onDeleteConversation: (String) -> Unit,
     onConversationClick: (String) -> Unit,
+    onUndoDelete: () -> Unit,
+    onDismissUndo: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(state.lastDeletedConversation) {
+        if (state.lastDeletedConversation != null) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Conversation deleted",
+                actionLabel = "Undo"
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                onUndoDelete()
+            } else {
+                onDismissUndo()
+            }
+        }
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
@@ -58,6 +84,11 @@ fun ConversationListScreen(
                     imageVector = Icons.Outlined.Add,
                     contentDescription = "New conversation"
                 )
+            }
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState) { data ->
+                Snackbar(snackbarData = data)
             }
         }
     ) { innerPadding ->
@@ -92,7 +123,21 @@ fun ConversationListScreen(
                 ) { conversation ->
                     ListItem(
                         headlineContent = { Text(conversation.title) },
-                        supportingContent = { Text(conversation.providerType.name) },
+                        supportingContent = {
+                            Column {
+                                if (!conversation.lastMessagePreview.isNullOrBlank()) {
+                                    Text(
+                                        text = conversation.lastMessagePreview,
+                                        maxLines = 1
+                                    )
+                                }
+                                Text(
+                                    text = conversation.relativeUpdatedAt,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
                         trailingContent = {
                             IconButton(onClick = { onDeleteConversation(conversation.id) }) {
                                 Icon(

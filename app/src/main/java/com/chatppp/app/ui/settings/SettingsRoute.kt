@@ -23,7 +23,9 @@ fun SettingsRoute(
             SettingsViewModel(
                 appPreferences = entryPoint.appPreferences(),
                 secretStore = entryPoint.secretStore(),
-                configPresetStore = entryPoint.configPresetStore()
+                configPresetStore = entryPoint.configPresetStore(),
+                providerSelector = entryPoint.providerSelector(),
+                connectionTestService = entryPoint.connectionTestService()
             )
         }
     )
@@ -44,6 +46,9 @@ fun SettingsRoute(
         onDirectApiKeyChanged = viewModel::saveDirectApiKey,
         onRelayTokenChanged = viewModel::saveRelayToken,
         onToggleDirectApiKeyVisibility = viewModel::toggleDirectApiKeyVisibility,
-        onToggleRelayTokenVisibility = viewModel::toggleRelayTokenVisibility
+        onToggleRelayTokenVisibility = viewModel::toggleRelayTokenVisibility,
+        onRunConnectionTest = viewModel::runConnectionTest,
+        onResetConnectionStatus = viewModel::resetConnectionStatus,
+        onApplyProviderTemplate = viewModel::applyProviderTemplate
     )
 }

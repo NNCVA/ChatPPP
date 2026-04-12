@@ -37,10 +37,12 @@ class ChatPppNavigationTest {
     fun created_conversation_persists_after_activity_recreation() {
         composeRule.onNodeWithContentDescription("Open conversations").performClick()
         composeRule.onNodeWithContentDescription("New conversation").performClick()
-        composeRule.onNodeWithText("New Chat").assertIsDisplayed()
+        composeRule.onNodeWithText("ChatPPP").assertIsDisplayed()
 
         composeRule.activityRule.scenario.recreate()
 
+        composeRule.onNodeWithText("ChatPPP").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Open conversations").performClick()
         composeRule.onNodeWithText("Conversations").assertIsDisplayed()
         composeRule.onNodeWithText("New Chat").assertIsDisplayed()
     }

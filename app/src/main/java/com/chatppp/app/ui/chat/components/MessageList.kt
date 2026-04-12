@@ -15,6 +15,9 @@ fun MessageList(
     messages: List<UiMessage>,
     onRetryClick: (String) -> Unit,
     onToggleThinkingClick: (String) -> Unit,
+    onOpenSettingsClick: (() -> Unit)? = null,
+    onCopyClick: (String) -> Unit,
+    onEditResendClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
@@ -30,6 +33,9 @@ fun MessageList(
                 message = message,
                 onRetryClick = onRetryClick,
                 onToggleThinkingClick = onToggleThinkingClick,
+                onOpenSettingsClick = onOpenSettingsClick,
+                onCopyClick = onCopyClick,
+                onEditResendClick = onEditResendClick,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
         }

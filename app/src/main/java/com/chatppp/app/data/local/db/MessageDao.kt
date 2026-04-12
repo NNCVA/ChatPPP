@@ -17,4 +17,7 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteByConversationId(conversationId: String)
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getLastMessage(conversationId: String): MessageEntity?
 }

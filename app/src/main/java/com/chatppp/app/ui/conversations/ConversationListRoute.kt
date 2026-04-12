@@ -9,6 +9,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chatppp.app.di.AppEntryPoint
 import com.chatppp.app.ui.common.rememberViewModelFactory
 import dagger.hilt.android.EntryPointAccessors
+import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun ConversationListRoute(
@@ -28,14 +29,31 @@ fun ConversationListRoute(
         }
     )
     val state by viewModel.uiState.collectAsState()
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.effects.collectLatest { effect ->
+            when (effect) {
+                is ConversationListEffect.OpenConversation -> {
+                    onConversationClick(effect.conversationId)
+                }
+                is ConversationListEffect.ShowUndoDelete -> {
+                    // Handled by the screen via state
+                }
+            }
+        }
+    }
+
     ConversationListScreen(
         state = state,
+        effects = viewModel.effects,
         onBack = onBack,
         onCreateConversation = viewModel::createConversation,
         onDeleteConversation = viewModel::deleteConversation,
         onConversationClick = { conversationId ->
             viewModel.selectConversation(conversationId)
             onConversationClick(conversationId)
-        }
+        },
+        onUndoDelete = viewModel::undoDelete,
+        onDismissUndo = viewModel::dismissUndo
     )
 }

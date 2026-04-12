@@ -3,7 +3,9 @@ package com.chatppp.app.ui.chat
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -102,7 +104,33 @@ class ChatScreenTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("Retry message").assertIsDisplayed()
+        composeRule.onNodeWithText("Retry").assertIsDisplayed()
+    }
+
+    @Test
+    fun config_error_shows_open_settings_without_retry() {
+        composeRule.setContent {
+            ChatPppTheme {
+                ChatScreen(
+                    state = ChatUiState(
+                        messages = listOf(
+                            UiMessage(
+                                id = "assistant-config-error",
+                                role = MessageRole.ASSISTANT,
+                                content = "Direct mode requires an API key",
+                                status = MessageStatus.ERROR,
+                                recoveryActionType = RecoveryActionType.OPEN_SETTINGS
+                            )
+                        )
+                    ),
+                    onAction = {},
+                    onOpenSettings = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Open settings").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Retry").assertCountEquals(0)
     }
 
     @Test
@@ -110,7 +138,7 @@ class ChatScreenTest {
         composeRule.setContent {
             ChatPppTheme {
                 ChatScreen(
-                    state = ChatUiState(),
+                    state = ChatUiState(requiresSetup = false),
                     onAction = {}
                 )
             }

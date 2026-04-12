@@ -2,7 +2,10 @@ package com.chatppp.app.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.chatppp.app.data.local.preferences.AppPreferences
+import com.chatppp.app.data.local.secrets.SecretStore
 import com.chatppp.app.data.presets.ConfigPresetStore
+import com.chatppp.app.data.remote.provider.ProviderSelector
 import com.chatppp.app.domain.model.Message
 import com.chatppp.app.domain.model.MessageRole
 import com.chatppp.app.domain.model.MessageStatus
@@ -16,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
@@ -25,7 +29,10 @@ import kotlinx.coroutines.launch
 class ChatViewModel(
     private val repository: ChatRepository,
     private val lastConversationStore: LastConversationStore,
-    private val configPresetStore: ConfigPresetStore
+    private val configPresetStore: ConfigPresetStore,
+    private val providerSelector: ProviderSelector,
+    private val appPreferences: AppPreferences,
+    private val secretStore: SecretStore
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -82,6 +89,17 @@ class ChatViewModel(
         }
 
         viewModelScope.launch {
+            combine(
+                appPreferences.providerType,
+                appPreferences.baseUrl
+            ) { providerType, _ ->
+                providerType
+            }.collect { providerType ->
+                refreshSetupState(providerTypeOverride = providerType)
+            }
+        }
+
+        viewModelScope.launch {
             currentConversationId
                 .flatMapLatest { conversationId ->
                     observeMessages(conversationId)
@@ -89,10 +107,20 @@ class ChatViewModel(
                 .collect { messages ->
                     latestMessages = messages
                     val isStreaming = messages.any { it.status == MessageStatus.STREAMING } && !streamingDismissed
+                    val recoveryState = deriveRecoveryState(messages)
+                    val requestPhaseLabel = deriveRequestPhaseLabel(messages, isStreaming)
                     _uiState.update { state ->
                         state.copy(
-                            messages = messages.map(::toUiMessage),
-                            isStreaming = isStreaming
+                            messages = messages.map { message ->
+                                toUiMessage(
+                                    message = message,
+                                    recoveryActionType = recoveryActionFor(message)
+                                )
+                            },
+                            isStreaming = isStreaming,
+                            recoveryActionLabel = recoveryState.first,
+                            recoveryActionType = recoveryState.second,
+                            requestPhaseLabel = requestPhaseLabel
                         )
                     }
                     if (messages.none { it.status == MessageStatus.STREAMING }) {
@@ -121,6 +149,10 @@ class ChatViewModel(
             is ChatAction.RetryMessage -> retryMessage(action.failedMessageId)
             is ChatAction.ToggleThinking -> toggleThinking(action.messageId)
             ChatAction.StopGenerating -> stopGenerating()
+            is ChatAction.CopyMessage -> copyMessage(action.messageId)
+            is ChatAction.EditMessage -> editMessage(action.messageId)
+            ChatAction.DismissRecoveryBanner -> dismissRecoveryBanner()
+            ChatAction.CopyHandled -> _uiState.update { it.copy(copiedMessageContent = null) }
         }
     }
 
@@ -132,7 +164,7 @@ class ChatViewModel(
         }
 
         streamingDismissed = false
-        _uiState.update { it.copy(inputText = "") }
+        _uiState.update { it.copy(inputText = "", requestPhaseLabel = "Connecting") }
         viewModelScope.launch {
             val conversationId = currentConversationId.value ?: repository.createConversation().also { createdId ->
                 currentConversationId.value = createdId
@@ -187,13 +219,107 @@ class ChatViewModel(
             }
         }
         _uiState.update { state ->
-            state.copy(messages = latestMessages.map(::toUiMessage))
+            state.copy(
+                messages = latestMessages.map { message ->
+                    toUiMessage(
+                        message = message,
+                        recoveryActionType = recoveryActionFor(message)
+                    )
+                }
+            )
         }
     }
 
-    private fun toUiMessage(message: Message) = message.toUiMessage(
-        isThinkingExpanded = message.id in expandedThinkingMessageIds
+    private fun deriveRecoveryState(messages: List<Message>): Pair<String?, RecoveryActionType?> {
+        val errorMessage = messages.lastOrNull { it.status == MessageStatus.ERROR }
+        if (errorMessage == null) {
+            return null to null
+        }
+        val content = errorMessage.content
+        return when {
+            content.startsWith("Config:") ||
+            content.startsWith("Authentication failed") ||
+            content.contains("API key", ignoreCase = true) ||
+            content.contains("relay token", ignoreCase = true) -> "Open settings" to RecoveryActionType.OPEN_SETTINGS
+            else -> "Retry" to RecoveryActionType.RETRY
+        }
+    }
+
+    fun dismissRecoveryBanner() {
+        _uiState.update { it.copy(recoveryActionLabel = null, recoveryActionType = null) }
+    }
+
+    fun refreshSetupState() {
+        refreshSetupState(providerTypeOverride = null)
+    }
+
+    private fun copyMessage(messageId: String) {
+        val message = latestMessages.firstOrNull { it.id == messageId }
+        if (message != null) {
+            _uiState.update { it.copy(copiedMessageContent = message.content) }
+        }
+    }
+
+    private fun editMessage(messageId: String) {
+        val message = latestMessages.firstOrNull { it.id == messageId }
+        if (message != null) {
+            _uiState.update { it.copy(inputText = message.content) }
+        }
+    }
+
+    private fun deriveRequestPhaseLabel(messages: List<Message>, isStreaming: Boolean): String? {
+        if (!isStreaming) {
+            return null
+        }
+        val streamingMessage = messages.lastOrNull { it.status == MessageStatus.STREAMING }
+        return if (streamingMessage != null && streamingMessage.content.isNotEmpty()) {
+            "Streaming"
+        } else {
+            "Connecting"
+        }
+    }
+
+    private fun toUiMessage(
+        message: Message,
+        recoveryActionType: RecoveryActionType? = null
+    ) = message.toUiMessage(
+        isThinkingExpanded = message.id in expandedThinkingMessageIds,
+        recoveryActionType = recoveryActionType
     )
+
+    private fun recoveryActionFor(message: Message): RecoveryActionType? {
+        if (message.status != MessageStatus.ERROR) {
+            return null
+        }
+        val content = message.content
+        return when {
+            content.startsWith("Config:") ||
+                content.startsWith("Authentication failed") ||
+                content.contains("API key", ignoreCase = true) ||
+                content.contains("relay token", ignoreCase = true) ->
+                RecoveryActionType.OPEN_SETTINGS
+
+            else -> RecoveryActionType.RETRY
+        }
+    }
+
+    private fun refreshSetupState(providerTypeOverride: com.chatppp.app.domain.model.ProviderType?) {
+        viewModelScope.launch {
+            val providerType = providerTypeOverride ?: appPreferences.providerType.first()
+            val validation = providerSelector.validate(
+                providerType,
+                appPreferences.baseUrl.first(),
+                secretStore.getDirectApiKey(),
+                secretStore.getRelayToken()
+            )
+            _uiState.update { state ->
+                state.copy(
+                    requiresSetup = validation.readinessLabel != "Ready",
+                    readinessLabel = validation.readinessLabel
+                )
+            }
+        }
+    }
 
     private data class ChatPresetSnapshot(
         val availablePresets: List<ChatPresetUiModel>,

@@ -1,16 +1,26 @@
 package com.chatppp.app.ui.chat
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import com.chatppp.app.data.local.preferences.AppPreferences
+import com.chatppp.app.data.local.secrets.SecretStore
+import com.chatppp.app.data.presets.ConfigPresetStore
+import com.chatppp.app.data.remote.provider.ChatProvider
+import com.chatppp.app.data.remote.provider.ProviderSelector
+import com.chatppp.app.data.remote.provider.SettingsValidationResult
+import com.chatppp.app.domain.model.ConfigPreset
+import com.chatppp.app.domain.model.Conversation
 import com.chatppp.app.domain.model.Message
 import com.chatppp.app.domain.model.MessageRole
 import com.chatppp.app.domain.model.MessageStatus
-import com.chatppp.app.domain.model.Conversation
-import com.chatppp.app.domain.model.ConfigPreset
 import com.chatppp.app.domain.model.ProviderType
-import com.chatppp.app.data.presets.ConfigPresetStore
 import com.chatppp.app.domain.repository.ChatRepository
 import com.chatppp.app.domain.session.LastConversationStore
 import com.chatppp.app.ui.MainDispatcherRule
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -20,6 +30,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.nio.file.Files
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModelTest {
@@ -33,7 +44,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         viewModel.onAction(ChatAction.UpdateInput("   "))
@@ -54,7 +68,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         viewModel.onAction(ChatAction.UpdateInput("Hello"))
@@ -73,7 +90,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         viewModel.onAction(ChatAction.UpdateInput("Hello"))
@@ -95,7 +115,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         repository.messages.value = listOf(
@@ -124,7 +147,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         repository.messages.value = listOf(
@@ -163,7 +189,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         repository.messages.value = listOf(
@@ -208,7 +237,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = configPresetStore
+            configPresetStore = configPresetStore,
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
         advanceUntilIdle()
 
@@ -230,7 +262,10 @@ class ChatViewModelTest {
         val viewModel = ChatViewModel(
             repository = repository,
             lastConversationStore = lastConversationStore,
-            configPresetStore = FakeChatConfigPresetStore()
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
         )
 
         repository.messages.value = listOf(
@@ -253,6 +288,328 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(true, viewModel.uiState.value.messages.first().isThinkingExpanded)
+    }
+
+    @Test
+    fun copy_message_sets_copied_message_content_in_ui_state() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Hello world",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            )
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.CopyMessage("message-1"))
+        advanceUntilIdle()
+
+        assertEquals("Hello world", viewModel.uiState.value.copiedMessageContent)
+    }
+
+    @Test
+    fun copy_handled_clears_copied_message_content() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Hello world",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            )
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.CopyMessage("message-1"))
+        advanceUntilIdle()
+        assertEquals("Hello world", viewModel.uiState.value.copiedMessageContent)
+
+        viewModel.onAction(ChatAction.CopyHandled)
+        advanceUntilIdle()
+        assertEquals(null, viewModel.uiState.value.copiedMessageContent)
+    }
+
+    @Test
+    fun edit_message_sets_input_text_to_message_content() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Original message",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            )
+        )
+        advanceUntilIdle()
+
+        viewModel.onAction(ChatAction.EditMessage("message-1"))
+        advanceUntilIdle()
+
+        assertEquals("Original message", viewModel.uiState.value.inputText)
+    }
+
+    @Test
+    fun error_message_sets_recovery_action_to_retry() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Hello",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            ),
+            Message(
+                id = "message-2",
+                conversationId = "conversation-1",
+                role = MessageRole.ASSISTANT,
+                content = "Network error",
+                status = MessageStatus.ERROR,
+                createdAt = 2L
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("Retry", viewModel.uiState.value.recoveryActionLabel)
+        assertEquals(RecoveryActionType.RETRY, viewModel.uiState.value.recoveryActionType)
+    }
+
+    @Test
+    fun config_error_sets_recovery_action_to_open_settings() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Hello",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            ),
+            Message(
+                id = "message-2",
+                conversationId = "conversation-1",
+                role = MessageRole.ASSISTANT,
+                content = "Config: Missing API key",
+                status = MessageStatus.ERROR,
+                createdAt = 2L
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("Open settings", viewModel.uiState.value.recoveryActionLabel)
+        assertEquals(RecoveryActionType.OPEN_SETTINGS, viewModel.uiState.value.recoveryActionType)
+    }
+
+    @Test
+    fun dismiss_recovery_banner_clears_recovery_state() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "message-1",
+                conversationId = "conversation-1",
+                role = MessageRole.USER,
+                content = "Hello",
+                status = MessageStatus.SUCCESS,
+                createdAt = 1L
+            ),
+            Message(
+                id = "message-2",
+                conversationId = "conversation-1",
+                role = MessageRole.ASSISTANT,
+                content = "Network error",
+                status = MessageStatus.ERROR,
+                createdAt = 2L
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals("Retry", viewModel.uiState.value.recoveryActionLabel)
+
+        viewModel.dismissRecoveryBanner()
+        advanceUntilIdle()
+
+        assertEquals(null, viewModel.uiState.value.recoveryActionLabel)
+        assertEquals(null, viewModel.uiState.value.recoveryActionType)
+    }
+
+    @Test
+    fun refresh_setup_state_reloads_latest_secret_values() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore()
+        val appPreferences = createAppPreferences().also {
+            it.updateProviderAndChatSettings(
+                providerType = ProviderType.DIRECT,
+                baseUrl = "https://api.openai.com/v1",
+                model = "gpt-4.1-mini",
+                streamEnabled = true
+            )
+        }
+        val secretStore = FakeSecretStore()
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector { _, baseUrl, directApiKey, _ ->
+                if (baseUrl.isBlank() || directApiKey.isNullOrBlank()) {
+                    SettingsValidationResult.notReady("credential" to "Direct mode requires an API key")
+                } else {
+                    SettingsValidationResult.ready()
+                }
+            },
+            appPreferences = appPreferences,
+            secretStore = secretStore
+        )
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.requiresSetup)
+
+        secretStore.saveDirectApiKey("fresh-key")
+        viewModel.refreshSetupState()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.requiresSetup)
+        assertEquals("Ready", viewModel.uiState.value.readinessLabel)
+    }
+
+    @Test
+    fun recovery_actions_are_scoped_per_message() = runTest {
+        val repository = FakeChatRepository()
+        val lastConversationStore = FakeLastConversationStore("conversation-1")
+        repository.conversations.value = listOf(
+            testConversation(id = "conversation-1", updatedAt = 1L)
+        )
+        val viewModel = ChatViewModel(
+            repository = repository,
+            lastConversationStore = lastConversationStore,
+            configPresetStore = FakeChatConfigPresetStore(),
+            providerSelector = FakeProviderSelector(),
+            appPreferences = createAppPreferences(),
+            secretStore = FakeSecretStore()
+        )
+
+        repository.messages.value = listOf(
+            Message(
+                id = "error-network",
+                conversationId = "conversation-1",
+                role = MessageRole.ASSISTANT,
+                content = "Network error",
+                status = MessageStatus.ERROR,
+                createdAt = 1L
+            ),
+            Message(
+                id = "error-config",
+                conversationId = "conversation-1",
+                role = MessageRole.ASSISTANT,
+                content = "Direct mode requires an API key",
+                status = MessageStatus.ERROR,
+                createdAt = 2L
+            )
+        )
+        advanceUntilIdle()
+
+        val networkError = viewModel.uiState.value.messages.first { it.id == "error-network" }
+        val configError = viewModel.uiState.value.messages.first { it.id == "error-config" }
+
+        assertEquals(RecoveryActionType.RETRY, networkError.recoveryActionType)
+        assertEquals(RecoveryActionType.OPEN_SETTINGS, configError.recoveryActionType)
+    }
+
+    private fun createAppPreferences(): AppPreferences {
+        val tempDirectory = Files.createTempDirectory("chat-viewmodel-test").toFile()
+        val scope = CoroutineScope(SupervisorJob() + mainDispatcherRule.dispatcher)
+        val dataStore: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+            scope = scope,
+            produceFile = { tempDirectory.resolve("settings.preferences_pb") }
+        )
+        return AppPreferences(dataStore)
     }
 }
 
@@ -280,6 +637,21 @@ private class FakeChatRepository : ChatRepository {
     override suspend fun deleteConversation(conversationId: String) = Unit
 
     override fun observeMessages(conversationId: String): Flow<List<Message>> = messages
+
+    override suspend fun getLastMessage(conversationId: String): Message? =
+        messages.value.lastOrNull()
+
+    override suspend fun restoreConversation(conversation: Conversation, messages: List<Message>) = Unit
+
+    override suspend fun updateConversationTitle(conversationId: String, title: String) {
+        conversations.value = conversations.value.map { c ->
+            if (c.id == conversationId) c.copy(title = title) else c
+        }
+    }
+
+    override suspend fun renameConversation(conversationId: String, newTitle: String) {
+        updateConversationTitle(conversationId, newTitle)
+    }
 
     override suspend fun sendMessage(conversationId: String, userInput: String) {
         sentInputs += conversationId to userInput
@@ -346,5 +718,48 @@ private class FakeChatConfigPresetStore(
 
     override suspend fun setActivePresetId(presetId: String?) {
         activePresetId.value = presetId
+    }
+}
+
+private class FakeProviderSelector(
+    private val validation: (ProviderType, String, String?, String?) -> SettingsValidationResult =
+        { _, _, _, _ -> SettingsValidationResult.ready() }
+) : ProviderSelector {
+    override suspend fun select(providerType: ProviderType): ChatProvider {
+        throw NotImplementedError("Not needed for tests")
+    }
+
+    override fun validate(
+        providerType: ProviderType,
+        baseUrl: String,
+        directApiKey: String?,
+        relayToken: String?
+    ): SettingsValidationResult {
+        return validation(providerType, baseUrl, directApiKey, relayToken)
+    }
+}
+
+private class FakeSecretStore : SecretStore {
+    private var directApiKey: String? = null
+    private var relayToken: String? = null
+
+    override fun getDirectApiKey(): String? = directApiKey
+
+    override fun saveDirectApiKey(value: String) {
+        directApiKey = value
+    }
+
+    override fun clearDirectApiKey() {
+        directApiKey = null
+    }
+
+    override fun getRelayToken(): String? = relayToken
+
+    override fun saveRelayToken(value: String) {
+        relayToken = value
+    }
+
+    override fun clearRelayToken() {
+        relayToken = null
     }
 }

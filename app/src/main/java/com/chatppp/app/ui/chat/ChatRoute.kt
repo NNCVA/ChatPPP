@@ -1,10 +1,14 @@
 package com.chatppp.app.ui.chat
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.chatppp.app.di.AppEntryPoint
 import com.chatppp.app.ui.common.rememberViewModelFactory
@@ -16,6 +20,7 @@ fun ChatRoute(
     onOpenSettings: () -> Unit
 ) {
     val applicationContext = LocalContext.current.applicationContext
+    val lifecycleOwner = LocalLifecycleOwner.current
     val entryPoint = remember(applicationContext) {
         EntryPointAccessors.fromApplication(applicationContext, AppEntryPoint::class.java)
     }
@@ -24,10 +29,24 @@ fun ChatRoute(
             ChatViewModel(
                 repository = entryPoint.chatRepository(),
                 lastConversationStore = entryPoint.lastConversationStore(),
-                configPresetStore = entryPoint.configPresetStore()
+                configPresetStore = entryPoint.configPresetStore(),
+                providerSelector = entryPoint.providerSelector(),
+                appPreferences = entryPoint.appPreferences(),
+                secretStore = entryPoint.secretStore()
             )
         }
     )
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshSetupState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     val state by viewModel.uiState.collectAsState()
     ChatScreen(
         state = state,

@@ -84,10 +84,42 @@ class DefaultChatRepository(
         conversationDao.deleteById(conversationId)
     }
 
+    override suspend fun restoreConversation(
+        conversation: Conversation,
+        messages: List<Message>
+    ) {
+        conversationDao.upsert(
+            ConversationEntity(
+                id = conversation.id,
+                title = conversation.title,
+                providerType = conversation.providerType.name,
+                presetId = conversation.presetId,
+                createdAt = conversation.createdAt,
+                updatedAt = conversation.updatedAt
+            )
+        )
+        messages.forEach { message ->
+            messageDao.upsert(
+                MessageEntity(
+                    id = message.id,
+                    conversationId = message.conversationId,
+                    role = message.role.name,
+                    content = message.content,
+                    thinkingContent = message.thinkingContent,
+                    status = message.status.name,
+                    createdAt = message.createdAt
+                )
+            )
+        }
+    }
+
     override fun observeMessages(conversationId: String): Flow<List<Message>> =
         messageDao.observeByConversationId(conversationId).map { entities ->
             entities.map { it.toDomain() }
         }
+
+    override suspend fun getLastMessage(conversationId: String): Message? =
+        messageDao.getLastMessage(conversationId)?.toDomain()
 
     override suspend fun sendMessage(
         conversationId: String,
@@ -105,6 +137,15 @@ class DefaultChatRepository(
         )
         messageDao.upsert(userMessage)
         conversationDao.updateUpdatedAt(conversationId, now)
+
+        // Auto-title on first user message: update "New Chat" title to first 50 chars of user input
+        val conversation = conversationDao.getById(conversationId)
+        if (conversation?.title == "New Chat") {
+            val newTitle = userInput.take(50).takeWhile { it !in "\n\r" }
+            if (newTitle.isNotBlank()) {
+                conversationDao.updateTitle(conversationId, newTitle, now)
+            }
+        }
 
         val assistantMessageId = idGenerator()
         var assistantMessage = MessageEntity(
@@ -235,6 +276,14 @@ class DefaultChatRepository(
 
     override suspend fun stopStreaming(conversationId: String) {
         activeStreamJobs.remove(conversationId)?.cancel()
+    }
+
+    override suspend fun updateConversationTitle(conversationId: String, title: String) {
+        conversationDao.updateTitle(conversationId, title, clock())
+    }
+
+    override suspend fun renameConversation(conversationId: String, newTitle: String) {
+        conversationDao.updateTitle(conversationId, newTitle, clock())
     }
 
     private fun Throwable.userFacingMessage(): String = when (this) {
