@@ -122,7 +122,7 @@ cmd /c "set ANDROID_ADB_SERVER_PORT=<adb-server-port>&& gradlew.bat connectedDeb
 Fresh verification recorded on `2026-03-17` in this workspace:
 
 - `.\gradlew.bat testDebugUnitTest assembleDebug` passed
-- `app/build/reports/tests/testDebugUnitTest/index.html` reports `63 tests`, `0 failures`, `0 ignored`
+- `app/build/reports/tests/testDebugUnitTest/index.html` reports `62 tests`, `0 failures`, `0 ignored`
 - `cmd /c "gradlew.bat connectedDebugAndroidTest --rerun-tasks -Pandroid.testInstrumentationRunnerArguments.class=com.chatppp.app.ui.settings.SettingsScreenTest"` passed on a local emulator
 - `app/build/reports/androidTests/connected/debug/index.html` reports `4 tests`, `0 failures`, `0 skipped`
 
